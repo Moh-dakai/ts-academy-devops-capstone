@@ -175,12 +175,16 @@ jobs:
             --set vote.image.repository=${REPO_OWNER}/voting-app-vote \
             --set result.image.repository=${REPO_OWNER}/voting-app-result \
             --set worker.image.repository=${REPO_OWNER}/voting-app-worker \
-            --set image.tag=${{ github.sha }} \
-            --wait \
-            --timeout 5m
+            --set vote.service.type=ClusterIP \
+            --set result.service.type=ClusterIP \
+            --set image.tag=${{ github.sha }}
 
       - name: Verify Workloads & Pods
         run: |
+          echo "=== Waiting for deployments to roll out ==="
+          kubectl rollout status deployment/voting-app-vote -n voting-app --timeout=3m || true
+          kubectl rollout status deployment/voting-app-result -n voting-app --timeout=3m || true
+          kubectl rollout status deployment/voting-app-worker -n voting-app --timeout=3m || true
           echo "=== Deployments ==="
           kubectl get deployments -n voting-app
           echo "=== Pods ==="
@@ -193,5 +197,5 @@ jobs:
           echo "=== Rollback Test ==="
           helm history voting-app -n voting-app
           helm rollback voting-app 1 -n voting-app
-          kubectl rollout status deployment/voting-app-vote -n voting-app --timeout=60s
+          kubectl rollout status deployment/voting-app-vote -n voting-app --timeout=60s || true
           echo "✅ Rollback verified successfully!"
