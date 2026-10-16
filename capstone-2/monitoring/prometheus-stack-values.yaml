@@ -1,0 +1,439 @@
+# ==============================================================================
+# kube-prometheus-stack Helm Values
+# Chart: prometheus-community/kube-prometheus-stack
+# Capstone 2 – Robot Shop Observability Stack
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Global settings
+# ------------------------------------------------------------------------------
+global:
+  rbac:
+    create: true
+    pspEnabled: false
+
+# ------------------------------------------------------------------------------
+# Prometheus
+# ------------------------------------------------------------------------------
+prometheus:
+  enabled: true
+
+  prometheusSpec:
+    # Retention and storage
+    retention: 15d
+    retentionSize: ""
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
+
+    # Scrape interval
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+
+    # Allow scraping all namespaces
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    # Resource limits
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+    # Additional scrape configs (Robot Shop services via annotations)
+    additionalScrapeConfigs:
+      - job_name: "robot-shop-services"
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - robot-shop
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: kubernetes_pod_name
+
+  # Custom PrometheusRule for Robot Shop / Voting App SLOs
+  additionalPrometheusRulesMap:
+    voting-app-rules:
+      groups:
+        - name: voting-app.slo
+          interval: 30s
+          rules:
+            # ---------------------------------------------------------------
+            # VotingAppHighErrorRate
+            # Alert when > 5 % of HTTP responses are 5xx for 5 minutes
+            # ---------------------------------------------------------------
+            - alert: VotingAppHighErrorRate
+              expr: |
+                (
+                  sum(rate(http_requests_total{namespace="robot-shop", status=~"5.."}[5m]))
+                  /
+                  sum(rate(http_requests_total{namespace="robot-shop"}[5m]))
+                ) > 0.05
+              for: 5m
+              labels:
+                severity: critical
+                team: platform
+              annotations:
+                summary: "Robot Shop error rate above 5 %"
+                description: >
+                  The HTTP 5xx error rate for the Robot Shop application has exceeded
+                  5 % for the last 5 minutes. Current value: {{ $value | humanizePercentage }}.
+                runbook_url: "https://wiki.example.com/runbooks/high-error-rate"
+
+            # ---------------------------------------------------------------
+            # VotingAppHighLatency
+            # Alert when P99 latency > 1 s for 5 minutes
+            # ---------------------------------------------------------------
+            - alert: VotingAppHighLatency
+              expr: |
+                histogram_quantile(
+                  0.99,
+                  sum(rate(http_request_duration_seconds_bucket{namespace="robot-shop"}[5m])) by (le, service)
+                ) > 1
+              for: 5m
+              labels:
+                severity: warning
+                team: platform
+              annotations:
+                summary: "Robot Shop P99 latency above 1 s (service={{ $labels.service }})"
+                description: >
+                  The 99th-percentile HTTP request latency for service {{ $labels.service }}
+                  has been above 1 second for the last 5 minutes.
+                  Current value: {{ $value | humanizeDuration }}.
+                runbook_url: "https://wiki.example.com/runbooks/high-latency"
+
+        - name: voting-app.availability
+          interval: 60s
+          rules:
+            - alert: VotingAppPodCrashLooping
+              expr: |
+                increase(kube_pod_container_status_restarts_total{namespace="robot-shop"}[1h]) > 5
+              for: 2m
+              labels:
+                severity: critical
+                team: platform
+              annotations:
+                summary: "Pod {{ $labels.pod }} is crash-looping"
+                description: >
+                  Container {{ $labels.container }} in pod {{ $labels.pod }} restarted
+                  more than 5 times in the last hour.
+                runbook_url: "https://wiki.example.com/runbooks/crash-looping"
+
+            - alert: VotingAppDeploymentReplicasMismatch
+              expr: |
+                kube_deployment_spec_replicas{namespace="robot-shop"}
+                  !=
+                kube_deployment_status_available_replicas{namespace="robot-shop"}
+              for: 5m
+              labels:
+                severity: warning
+                team: platform
+              annotations:
+                summary: "Deployment {{ $labels.deployment }} has mismatched replicas"
+                description: >
+                  Deployment {{ $labels.deployment }} expected
+                  {{ $labels.spec_replicas }} replicas but only
+                  {{ $labels.available_replicas }} are available.
+
+# ------------------------------------------------------------------------------
+# Grafana
+# ------------------------------------------------------------------------------
+grafana:
+  enabled: true
+
+  # Admin credentials – password comes from a pre-created Secret
+  admin:
+    existingSecret: grafana-admin-secret
+    userKey: admin-user
+    passwordKey: admin-password
+
+  # Persistence
+  persistence:
+    enabled: true
+    type: pvc
+    accessModes:
+      - ReadWriteOnce
+    size: 5Gi
+
+  # Grafana INI overrides
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s/grafana"
+      serve_from_sub_path: true
+    auth.anonymous:
+      enabled: false
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+    log:
+      mode: console
+      level: info
+    alerting:
+      enabled: false   # Using Alertmanager instead
+    unified_alerting:
+      enabled: true
+
+  # Datasources
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        # Prometheus – default datasource
+        - name: Prometheus
+          type: prometheus
+          uid: prometheus
+          url: http://kube-prometheus-stack-prometheus:9090
+          access: proxy
+          isDefault: true
+          editable: true
+          jsonData:
+            timeInterval: "30s"
+            queryTimeout: "60s"
+            httpMethod: POST
+
+        # Loki – log aggregation
+        - name: Loki
+          type: loki
+          uid: loki
+          url: http://loki:3100
+          access: proxy
+          isDefault: false
+          editable: true
+          jsonData:
+            maxLines: 1000
+            derivedFields:
+              - datasourceUid: jaeger
+                matcherRegex: '"traceID":"(\w+)"'
+                name: TraceID
+                url: '$${__value.raw}'
+
+        # Jaeger – distributed tracing
+        - name: Jaeger
+          type: jaeger
+          uid: jaeger
+          url: http://jaeger-query:16686
+          access: proxy
+          isDefault: false
+          editable: true
+
+  # Dashboard sidecar – auto-discovers ConfigMaps with label grafana_dashboard: "1"
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+      label: grafana_datasource
+      labelValue: "1"
+
+  # Resource limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Service
+  service:
+    type: ClusterIP
+    port: 80
+
+# ------------------------------------------------------------------------------
+# Alertmanager
+# ------------------------------------------------------------------------------
+alertmanager:
+  enabled: true
+
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 2Gi
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  config:
+    global:
+      resolve_timeout: 5m
+      # Slack API URL injected via environment variable in the Secret
+      slack_api_url: "${SLACK_WEBHOOK_URL}"
+
+    templates:
+      - "/etc/alertmanager/config/*.tmpl"
+
+    route:
+      group_by:
+        - alertname
+        - namespace
+        - severity
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: "slack-receiver"
+      routes:
+        - matchers:
+            - severity = critical
+          receiver: "slack-critical"
+          continue: true
+        - matchers:
+            - severity = warning
+          receiver: "slack-receiver"
+
+    inhibit_rules:
+      - source_matchers:
+          - severity = critical
+        target_matchers:
+          - severity = warning
+        equal:
+          - alertname
+          - namespace
+
+    receivers:
+      - name: "slack-receiver"
+        slack_configs:
+          - channel: "#robot-shop-alerts"
+            send_resolved: true
+            title: |-
+              [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}
+            text: |-
+              {{ range .Alerts }}
+              *Alert:* {{ .Annotations.summary }}
+              *Severity:* {{ .Labels.severity }}
+              *Description:* {{ .Annotations.description }}
+              *Runbook:* {{ .Annotations.runbook_url }}
+              *Started:* {{ .StartsAt | since }}
+              {{ end }}
+
+      - name: "slack-critical"
+        slack_configs:
+          - channel: "#robot-shop-alerts"
+            send_resolved: true
+            title: |-
+              🔴 [CRITICAL{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}
+            text: |-
+              {{ range .Alerts }}
+              *Alert:* {{ .Annotations.summary }}
+              *Severity:* `CRITICAL`
+              *Namespace:* {{ .Labels.namespace }}
+              *Description:* {{ .Annotations.description }}
+              *Runbook:* {{ .Annotations.runbook_url }}
+              *Dashboard:* https://grafana.example.com/d/robot-shop-slo
+              {{ end }}
+
+# ------------------------------------------------------------------------------
+# kube-state-metrics
+# ------------------------------------------------------------------------------
+kubeStateMetrics:
+  enabled: true
+
+kube-state-metrics:
+  metricLabelsAllowlist:
+    - pods=[app,version,release]
+    - deployments=[app,version,release]
+    - services=[app,version]
+
+# ------------------------------------------------------------------------------
+# Node Exporter
+# ------------------------------------------------------------------------------
+nodeExporter:
+  enabled: true
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# ------------------------------------------------------------------------------
+# Prometheus Operator
+# ------------------------------------------------------------------------------
+prometheusOperator:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ------------------------------------------------------------------------------
+# Default rules (keep most enabled)
+# ------------------------------------------------------------------------------
+defaultRules:
+  create: true
+  rules:
+    alertmanager: true
+    etcd: true
+    configReloaders: true
+    general: true
+    k8s: true
+    kubeApiserverAvailability: true
+    kubeApiserverBurnrate: true
+    kubeApiserverHistogram: true
+    kubeApiserverSlos: true
+    kubelet: true
+    kubeProxy: false       # disable if kube-proxy metrics not exposed
+    kubePrometheusGeneral: true
+    kubePrometheusNodeRecording: true
+    kubernetesApps: true
+    kubernetesResources: true
+    kubernetesStorage: true
+    kubernetesSystem: true
+    kubeScheduler: false   # disable if scheduler metrics not exposed
+    kubeStateMetrics: true
+    network: true
+    node: true
+    nodeExporterAlerting: true
+    nodeExporterRecording: true
+    prometheus: true
+    prometheusOperator: true

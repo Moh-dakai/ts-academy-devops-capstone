@@ -1,0 +1,62 @@
+# ==============================================================================
+# Alertmanager Configuration & Secret
+# Capstone 2 — Alert Routing to Slack
+# Namespace: monitoring
+# ==============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-slack-webhook
+  namespace: monitoring
+type: Opaque
+stringData:
+  # Replace with actual Slack incoming webhook URL before production use
+  slack-webhook-url: "YOUR_SLACK_WEBHOOK_URL_HERE"
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: robot-shop-alerts
+  namespace: monitoring
+  labels:
+    alertmanagerConfig: robot-shop
+spec:
+  route:
+    groupBy: ['alertname', 'namespace', 'service', 'severity']
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    receiver: 'slack-receiver'
+    routes:
+      - receiver: 'slack-receiver'
+        matchers:
+          - name: team
+            value: devops
+  inhibitRules:
+    - targetMatch:
+        - name: severity
+          value: warning
+      sourceMatch:
+        - name: severity
+          value: critical
+      equal: ['alertname', 'service', 'namespace']
+  receivers:
+    - name: 'slack-receiver'
+      slackConfigs:
+        - channel: '#robot-shop-alerts'
+          sendResolved: true
+          apiURL:
+            name: alertmanager-slack-webhook
+            key: slack-webhook-url
+          iconEmoji: ':rotating_light:'
+          title: |-
+            [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})
+          text: |-
+            {{ range .Alerts }}
+            *Alert:* {{ .Annotations.summary }}
+            *Description:* {{ .Annotations.description }}
+            *Severity:* `{{ .Labels.severity }}`
+            *Service:* `{{ .Labels.service }}`
+            *Namespace:* `{{ .Labels.namespace }}`
+            {{ if .Annotations.runbook_url }}*Runbook:* <{{ .Annotations.runbook_url }}|Click here to open runbook>{{ end }}
+            {{ end }}

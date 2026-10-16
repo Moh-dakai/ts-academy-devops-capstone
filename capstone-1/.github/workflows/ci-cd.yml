@@ -1,0 +1,191 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: docker.io
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 1: Run unit tests for the vote service
+  # ─────────────────────────────────────────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vote
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run pytest
+        run: |
+          pytest tests/ -v --tb=short --cov=. --cov-report=xml
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: vote/coverage.xml
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 2: Security scan with Trivy
+  # ─────────────────────────────────────────────────────────────────────────────
+  security-scan:
+    name: Security Scan (Trivy)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner (repo scan)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          output: trivy-report.txt
+
+      - name: Upload Trivy report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-security-report
+          path: trivy-report.txt
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 3: Build and push Docker images to Docker Hub
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-and-push:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    needs: security-scan
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    env:
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── Vote image ────────────────────────────────────────────────────────────
+      - name: Build and push vote image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./vote
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-vote:${{ env.IMAGE_TAG }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-vote:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Result image ──────────────────────────────────────────────────────────
+      - name: Build and push result image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./result
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-result:${{ env.IMAGE_TAG }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-result:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Worker image ──────────────────────────────────────────────────────────
+      - name: Build and push worker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./worker
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-worker:${{ env.IMAGE_TAG }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-worker:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 4: Deploy to EKS via Helm
+  # ─────────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ secrets.AWS_REGION }} \
+            --name voting-app-cluster
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install voting-app ./capstone-1/helm/voting-app \
+            --set image.tag=${{ github.sha }} \
+            --set vote.image.repository=${{ secrets.DOCKERHUB_USERNAME }}/voting-app-vote \
+            --set result.image.repository=${{ secrets.DOCKERHUB_USERNAME }}/voting-app-result \
+            --set worker.image.repository=${{ secrets.DOCKERHUB_USERNAME }}/voting-app-worker \
+            --wait \
+            --timeout 5m \
+            --atomic
+
+      - name: Verify deployment
+        run: |
+          kubectl rollout status deployment/$(kubectl get deployments -o name | grep vote | head -1 | cut -d/ -f2)
+          kubectl rollout status deployment/$(kubectl get deployments -o name | grep result | head -1 | cut -d/ -f2)
+          kubectl rollout status deployment/$(kubectl get deployments -o name | grep worker | head -1 | cut -d/ -f2)
+
+      - name: Print deployed services
+        run: |
+          echo "=== Deployed Services ==="
+          kubectl get svc -o wide
+          echo "=== Deployed Pods ==="
+          kubectl get pods -o wide

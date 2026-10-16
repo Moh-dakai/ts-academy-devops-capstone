@@ -1,0 +1,230 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: robot-shop-slo-alerts
+  namespace: monitoring
+  labels:
+    app: robot-shop
+    team: devops
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: robot-shop.slo
+      interval: 30s
+      rules:
+        # ======================================================================
+        # Web Service SLO Alerts
+        # ======================================================================
+        - alert: RobotShopWebErrorBudgetCritical
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="web", code=~"5.."}[1h]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="web"}[1h]))
+            ) / 0.005 > 14
+          for: 2m
+          labels:
+            severity: critical
+            service: web
+            team: devops
+          annotations:
+            summary: "Robot Shop Web: Critical error budget burn rate (14x over 1h)"
+            description: "The web service is burning error budget at {{ $value | printf \"%.1f\" }}x rate over 1h. Rapid budget exhaustion expected within 2 hours."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#31-robotshopwebhigherrorrate"
+
+        - alert: RobotShopWebErrorBudgetWarning
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="web", code=~"5.."}[6h]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="web"}[6h]))
+            ) / 0.005 > 6
+          for: 15m
+          labels:
+            severity: warning
+            service: web
+            team: devops
+          annotations:
+            summary: "Robot Shop Web: Elevated error budget burn rate (6x over 6h)"
+            description: "The web service is burning error budget at {{ $value | printf \"%.1f\" }}x rate over 6h."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#31-robotshopwebhigherrorrate"
+
+        - alert: RobotShopWebAvailabilityBreach
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="web", code=~"2..|3.."}[30m]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="web"}[30m]))
+            ) < 0.995
+          for: 5m
+          labels:
+            severity: critical
+            service: web
+            team: devops
+          annotations:
+            summary: "Robot Shop Web: Availability SLO Breach (<99.5% over 30m)"
+            description: "Web availability is currently {{ $value | printf \"%.2f\" }}% over the last 30 minutes, violating the 99.5% SLO target."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#31-robotshopwebhigherrorrate"
+
+        # ======================================================================
+        # Catalogue Service SLO Alerts
+        # ======================================================================
+        - alert: RobotShopCatalogueErrorBudgetCritical
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="catalogue", code=~"5.."}[1h]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="catalogue"}[1h]))
+            ) / 0.005 > 14
+          for: 2m
+          labels:
+            severity: critical
+            service: catalogue
+            team: devops
+          annotations:
+            summary: "Robot Shop Catalogue: Critical error budget burn rate (14x over 1h)"
+            description: "Catalogue service is burning error budget at {{ $value | printf \"%.1f\" }}x rate over 1h."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#32-robotshophighlatency"
+
+        - alert: RobotShopCatalogueErrorBudgetWarning
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="catalogue", code=~"5.."}[6h]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="catalogue"}[6h]))
+            ) / 0.005 > 6
+          for: 15m
+          labels:
+            severity: warning
+            service: catalogue
+            team: devops
+          annotations:
+            summary: "Robot Shop Catalogue: Elevated error budget burn rate (6x over 6h)"
+            description: "Catalogue service is burning error budget at {{ $value | printf \"%.1f\" }}x rate over 6h."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#32-robotshophighlatency"
+
+        - alert: RobotShopCatalogueAvailabilityBreach
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="catalogue", code=~"2.."}[30m]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="catalogue"}[30m]))
+            ) < 0.995
+          for: 5m
+          labels:
+            severity: critical
+            service: catalogue
+            team: devops
+          annotations:
+            summary: "Robot Shop Catalogue: Availability SLO Breach (<99.5% over 30m)"
+            description: "Catalogue availability is currently {{ $value | printf \"%.2f\" }}% over the last 30 minutes, violating the 99.5% SLO target."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#32-robotshophighlatency"
+
+        # ======================================================================
+        # Cart Service SLO Alerts
+        # ======================================================================
+        - alert: RobotShopCartErrorBudgetCritical
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="cart", code=~"5.."}[1h]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="cart"}[1h]))
+            ) / 0.005 > 14
+          for: 2m
+          labels:
+            severity: critical
+            service: cart
+            team: devops
+          annotations:
+            summary: "Robot Shop Cart: Critical error budget burn rate (14x over 1h)"
+            description: "Cart service is burning error budget at {{ $value | printf \"%.1f\" }}x rate over 1h."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#33-robotshopcartpaymentdown"
+
+        - alert: RobotShopCartErrorBudgetWarning
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="cart", code=~"5.."}[6h]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="cart"}[6h]))
+            ) / 0.005 > 6
+          for: 15m
+          labels:
+            severity: warning
+            service: cart
+            team: devops
+          annotations:
+            summary: "Robot Shop Cart: Elevated error budget burn rate (6x over 6h)"
+            description: "Cart service is burning error budget at {{ $value | printf \"%.1f\" }}x rate over 6h."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#33-robotshopcartpaymentdown"
+
+        - alert: RobotShopCartAvailabilityBreach
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="cart", code=~"2.."}[30m]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="cart"}[30m]))
+            ) < 0.995
+          for: 5m
+          labels:
+            severity: critical
+            service: cart
+            team: devops
+          annotations:
+            summary: "Robot Shop Cart: Availability SLO Breach (<99.5% over 30m)"
+            description: "Cart availability is currently {{ $value | printf \"%.2f\" }}% over the last 30 minutes, violating the 99.5% SLO target."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#33-robotshopcartpaymentdown"
+
+        # ======================================================================
+        # Payment Service SLO Alerts
+        # ======================================================================
+        - alert: RobotShopPaymentErrorBudgetCritical
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="payment", code=~"5.."}[1h]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="payment"}[1h]))
+            ) / 0.005 > 14
+          for: 2m
+          labels:
+            severity: critical
+            service: payment
+            team: devops
+          annotations:
+            summary: "Robot Shop Payment: Critical error budget burn rate (14x over 1h)"
+            description: "Payment service is burning error budget at {{ $value | printf \"%.1f\" }}x rate over 1h."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#33-robotshopcartpaymentdown"
+
+        - alert: RobotShopPaymentErrorBudgetWarning
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="payment", code=~"5.."}[6h]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="payment"}[6h]))
+            ) / 0.005 > 6
+          for: 15m
+          labels:
+            severity: warning
+            service: payment
+            team: devops
+          annotations:
+            summary: "Robot Shop Payment: Elevated error budget burn rate (6x over 6h)"
+            description: "Payment service is burning error budget at {{ $value | printf \"%.1f\" }}x rate over 6h."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#33-robotshopcartpaymentdown"
+
+        - alert: RobotShopPaymentAvailabilityBreach
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="robot-shop", service="payment", code=~"2.."}[30m]))
+              /
+              sum(rate(http_requests_total{namespace="robot-shop", service="payment"}[30m]))
+            ) < 0.995
+          for: 5m
+          labels:
+            severity: critical
+            service: payment
+            team: devops
+          annotations:
+            summary: "Robot Shop Payment: Availability SLO Breach (<99.5% over 30m)"
+            description: "Payment availability is currently {{ $value | printf \"%.2f\" }}% over the last 30 minutes, violating the 99.5% SLO target."
+            runbook_url: "https://github.com/your-org/ts-academy/blob/main/capstone-2/runbook/runbook.md#33-robotshopcartpaymentdown"

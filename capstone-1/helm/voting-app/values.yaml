@@ -1,0 +1,93 @@
+# Global image settings
+image:
+  registry: docker.io
+  tag: latest  # Overridden by CI/CD with commit SHA
+
+# ─── Vote Service ────────────────────────────────────────────────────────────
+vote:
+  image:
+    repository: dockersamples/examplevotingapp_vote
+  replicaCount: 2
+  service:
+    type: LoadBalancer
+    port: 80
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+
+# ─── Result Service ──────────────────────────────────────────────────────────
+result:
+  image:
+    repository: dockersamples/examplevotingapp_result
+  replicaCount: 2
+  service:
+    type: LoadBalancer
+    port: 80
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+
+# ─── Worker Service ──────────────────────────────────────────────────────────
+worker:
+  image:
+    repository: dockersamples/examplevotingapp_worker
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+
+# ─── Redis ───────────────────────────────────────────────────────────────────
+redis:
+  image: redis:7-alpine
+  service:
+    port: 6379
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+
+# ─── PostgreSQL ──────────────────────────────────────────────────────────────
+postgres:
+  image: postgres:15-alpine
+  service:
+    port: 5432
+  env:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    POSTGRES_DB: votes
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "250m"
+      memory: "512Mi"
+
+# ─── Ingress ─────────────────────────────────────────────────────────────────
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+# ─── Service Account ─────────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
