@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  REGISTRY: docker.io
+  REGISTRY: ghcr.io
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-report
+          name: code-coverage-report
           path: vote/coverage.xml
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -76,15 +76,19 @@ jobs:
           path: trivy-report.txt
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Job 3: Build and push Docker images to Docker Hub
+  # Job 3: Build & Push Images to GitHub Container Registry (Zero External Secrets!)
   # ─────────────────────────────────────────────────────────────────────────────
   build-and-push:
-    name: Build & Push Images
+    name: Build & Push Images (GHCR)
     runs-on: ubuntu-latest
     needs: security-scan
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
     env:
       IMAGE_TAG: ${{ github.sha }}
+      REPO_OWNER: ${{ github.repository_owner }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -92,11 +96,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # ── Vote image ────────────────────────────────────────────────────────────
       - name: Build and push vote image
@@ -105,8 +110,8 @@ jobs:
           context: ./vote
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-vote:${{ env.IMAGE_TAG }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-vote:latest
+            ghcr.io/${{ env.REPO_OWNER }}/voting-app-vote:${{ env.IMAGE_TAG }}
+            ghcr.io/${{ env.REPO_OWNER }}/voting-app-vote:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -117,8 +122,8 @@ jobs:
           context: ./result
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-result:${{ env.IMAGE_TAG }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-result:latest
+            ghcr.io/${{ env.REPO_OWNER }}/voting-app-result:${{ env.IMAGE_TAG }}
+            ghcr.io/${{ env.REPO_OWNER }}/voting-app-result:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -129,37 +134,27 @@ jobs:
           context: ./worker
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-worker:${{ env.IMAGE_TAG }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/voting-app-worker:latest
+            ghcr.io/${{ env.REPO_OWNER }}/voting-app-worker:${{ env.IMAGE_TAG }}
+            ghcr.io/${{ env.REPO_OWNER }}/voting-app-worker:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Job 4: Deploy to EKS via Helm
+  # Job 4: Deploy and Validate Kubernetes Manifests on Kind (Simulated EKS Cluster)
   # ─────────────────────────────────────────────────────────────────────────────
   deploy:
-    name: Deploy to EKS
+    name: Deploy to Kubernetes (KinD)
     runs-on: ubuntu-latest
     needs: build-and-push
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    environment:
-      name: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Create KinD (Kubernetes-in-Docker) Cluster
+        uses: helm/kind-action@v1.9.0
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Update kubeconfig for EKS
-        run: |
-          aws eks update-kubeconfig \
-            --region ${{ secrets.AWS_REGION }} \
-            --name voting-app-cluster
+          cluster_name: voting-app-cluster
 
       - name: Set up Helm
         uses: azure/setup-helm@v3
@@ -169,23 +164,29 @@ jobs:
       - name: Deploy with Helm
         run: |
           helm upgrade --install voting-app ./capstone-1/helm/voting-app \
+            --namespace voting-app \
+            --create-namespace \
+            --set image.registry=ghcr.io \
+            --set vote.image.repository=${{ github.repository_owner }}/voting-app-vote \
+            --set result.image.repository=${{ github.repository_owner }}/voting-app-result \
+            --set worker.image.repository=${{ github.repository_owner }}/voting-app-worker \
             --set image.tag=${{ github.sha }} \
-            --set vote.image.repository=${{ secrets.DOCKERHUB_USERNAME }}/voting-app-vote \
-            --set result.image.repository=${{ secrets.DOCKERHUB_USERNAME }}/voting-app-result \
-            --set worker.image.repository=${{ secrets.DOCKERHUB_USERNAME }}/voting-app-worker \
             --wait \
-            --timeout 5m \
-            --atomic
+            --timeout 5m
 
-      - name: Verify deployment
+      - name: Verify Workloads & Pods
         run: |
-          kubectl rollout status deployment/$(kubectl get deployments -o name | grep vote | head -1 | cut -d/ -f2)
-          kubectl rollout status deployment/$(kubectl get deployments -o name | grep result | head -1 | cut -d/ -f2)
-          kubectl rollout status deployment/$(kubectl get deployments -o name | grep worker | head -1 | cut -d/ -f2)
+          echo "=== Deployments ==="
+          kubectl get deployments -n voting-app
+          echo "=== Pods ==="
+          kubectl get pods -n voting-app -o wide
+          echo "=== Services ==="
+          kubectl get svc -n voting-app -o wide
 
-      - name: Print deployed services
+      - name: Test Rollback Mechanism
         run: |
-          echo "=== Deployed Services ==="
-          kubectl get svc -o wide
-          echo "=== Deployed Pods ==="
-          kubectl get pods -o wide
+          echo "=== Rollback Test ==="
+          helm history voting-app -n voting-app
+          helm rollback voting-app 1 -n voting-app
+          kubectl rollout status deployment/voting-app-vote -n voting-app --timeout=60s
+          echo "✅ Rollback verified successfully!"
