@@ -93,6 +93,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Lowercase Repository Owner
+        run: |
+          echo "REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -163,13 +167,14 @@ jobs:
 
       - name: Deploy with Helm
         run: |
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           helm upgrade --install voting-app ./capstone-1/helm/voting-app \
             --namespace voting-app \
             --create-namespace \
             --set image.registry=ghcr.io \
-            --set vote.image.repository=${{ github.repository_owner }}/voting-app-vote \
-            --set result.image.repository=${{ github.repository_owner }}/voting-app-result \
-            --set worker.image.repository=${{ github.repository_owner }}/voting-app-worker \
+            --set vote.image.repository=${REPO_OWNER}/voting-app-vote \
+            --set result.image.repository=${REPO_OWNER}/voting-app-result \
+            --set worker.image.repository=${REPO_OWNER}/voting-app-worker \
             --set image.tag=${{ github.sha }} \
             --wait \
             --timeout 5m
